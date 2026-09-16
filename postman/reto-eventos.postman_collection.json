@@ -1,0 +1,639 @@
+{
+  "info": {
+    "_postman_id": "5260d9a3-0a43-44e6-861f-18d23013ff2f",
+    "name": "ms-batch-producer, ms-event-consumer y ms-monitoreo",
+    "description": "Flujo A → Kafka → B. Seleccionar archivo en Body/form-data/file de la subida. La colección captura jobExecutionId/uploadId. C (8083) consulta conteos globales y tiempos de ingestión A. No requiere Environment adicional. Ejecutar reinicio solo para jobs FAILED/STOPPED.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "producerBaseUrl",
+      "value": "http://localhost:8080",
+      "type": "string",
+      "description": "URL de A; cambiar si publicas otro puerto."
+    },
+    {
+      "key": "consumerBaseUrl",
+      "value": "http://localhost:8081",
+      "type": "string",
+      "description": "URL de B; cambiar si publicas otro puerto."
+    },
+    {
+      "key": "jobExecutionId",
+      "value": "",
+      "type": "string",
+      "description": "Se completa después de subir o reiniciar una carga."
+    },
+    {
+      "key": "uploadId",
+      "value": "",
+      "type": "string",
+      "description": "Identificador de la carga; se captura automáticamente."
+    },
+    {
+      "key": "jobStatus",
+      "value": "",
+      "type": "string",
+      "description": "Último estado recibido."
+    },
+    {
+      "key": "metricName",
+      "value": "jvm.memory.used",
+      "type": "string",
+      "description": "Nombre de métrica Actuator a consultar."
+    },
+    {
+      "key": "monitorBaseUrl",
+      "value": "http://localhost:8083",
+      "type": "string",
+      "description": "URL del servicio C"
+    },
+    {
+      "key": "page",
+      "value": "0",
+      "type": "string",
+      "description": "Página desde cero"
+    },
+    {
+      "key": "size",
+      "value": "25",
+      "type": "string",
+      "description": "Tamaño entre 1 y 100"
+    }
+  ],
+  "item": [
+    {
+      "name": "Servicio A · Cargas batch",
+      "item": [
+        {
+          "name": "1. Subir XML o ZIP",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/api/batch/launch",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "batch",
+                "launch"
+              ]
+            },
+            "description": "Selecciona Body → form-data → file → Select Files y elige el XML o ZIP local. No agregues Content-Type manualmente. Devuelve 202 y guarda jobExecutionId/uploadId en las variables de esta colección. Una nueva subida crea una carga nueva.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Seleccionar archivo XML o ZIP desde tu equipo (máximo 25 MiB)."
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Solicitud aceptada\", function () { pm.response.to.have.status(202); });",
+                  "if (pm.response.code === 202) {",
+                  "    const data = pm.response.json();",
+                  "    pm.test(\"Respuesta contiene identificadores\", function () { pm.expect(data.jobExecutionId).to.be.a(\"number\"); pm.expect(data.uploadId).to.be.a(\"string\"); });",
+                  "    pm.collectionVariables.set(\"jobExecutionId\", String(data.jobExecutionId));",
+                  "    pm.collectionVariables.set(\"uploadId\", data.uploadId);",
+                  "    pm.collectionVariables.set(\"jobStatus\", data.status);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Consultar última carga",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/api/batch/jobs/{{jobExecutionId}}",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "batch",
+                "jobs",
+                "{{jobExecutionId}}"
+              ]
+            },
+            "description": "Ejecuta primero la subida o configura jobExecutionId manualmente. COMPLETED indica que A terminó la ingestión; pendingEvents=0 indica publicación en Kafka, no finalización de B. Esta consulta no proporciona el conteo de PROCESSED de B."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Consulta exitosa\", function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "    const data = pm.response.json();",
+                  "    pm.collectionVariables.set(\"jobStatus\", data.status);",
+                  "    if (data.uploadId) pm.collectionVariables.set(\"uploadId\", data.uploadId);",
+                  "    pm.test(\"Estado de ejecución presente\", function () { pm.expect(data.status).to.be.a(\"string\"); });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Reiniciar carga FAILED o STOPPED",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/api/batch/jobs/{{jobExecutionId}}/restart",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "batch",
+                "jobs",
+                "{{jobExecutionId}}",
+                "restart"
+              ]
+            },
+            "description": "Ejecutar individualmente solo si el job está FAILED o STOPPED. Conserva uploadId y continúa desde el checkpoint. Guarda el nuevo jobExecutionId para las consultas posteriores. No usar para jobs COMPLETED ni como acción rutinaria."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Solicitud aceptada\", function () { pm.response.to.have.status(202); });",
+                  "if (pm.response.code === 202) {",
+                  "    const data = pm.response.json();",
+                  "    pm.test(\"Respuesta contiene identificadores\", function () { pm.expect(data.jobExecutionId).to.be.a(\"number\"); pm.expect(data.uploadId).to.be.a(\"string\"); });",
+                  "    pm.collectionVariables.set(\"jobExecutionId\", String(data.jobExecutionId));",
+                  "    pm.collectionVariables.set(\"uploadId\", data.uploadId);",
+                  "    pm.collectionVariables.set(\"jobStatus\", data.status);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Servicio A · Producer · Salud y métricas",
+      "item": [
+        {
+          "name": "Salud",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/health",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Disponibilidad (readiness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/health/readiness",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "readiness"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Proceso activo (liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/health/liveness",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "liveness"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Información",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/info",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "info"
+              ]
+            },
+            "description": "Información publicada por Actuator. Un objeto vacío es válido."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Consulta exitosa\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listar métricas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/metrics",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics"
+              ]
+            },
+            "description": "Devuelve los nombres de métricas disponibles. Copia un nombre en metricName para consultar su valor."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Lista de métricas\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().names).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Consultar métrica",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{producerBaseUrl}}/actuator/metrics/{{metricName}}",
+              "host": [
+                "{{producerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics",
+                "{{metricName}}"
+              ]
+            },
+            "description": "Por defecto consulta jvm.memory.used. Cambia metricName usando uno de los nombres devueltos por Listar métricas."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Métrica disponible\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Servicio B · Consumer · Salud y métricas",
+      "item": [
+        {
+          "name": "Salud",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/health",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Disponibilidad (readiness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/health/readiness",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "readiness"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Proceso activo (liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/health/liveness",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "liveness"
+              ]
+            },
+            "description": "Salud de la aplicación. UP no garantiza lag=0 ni que todos los registros hayan terminado."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Servicio saludable\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql(\"UP\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Información",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/info",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "info"
+              ]
+            },
+            "description": "Información publicada por Actuator. Un objeto vacío es válido."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Consulta exitosa\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listar métricas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/metrics",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics"
+              ]
+            },
+            "description": "Devuelve los nombres de métricas disponibles. Copia un nombre en metricName para consultar su valor."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Lista de métricas\", function () { pm.response.to.have.status(200); pm.expect(pm.response.json().names).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Consultar métrica",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{consumerBaseUrl}}/actuator/metrics/{{metricName}}",
+              "host": [
+                "{{consumerBaseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics",
+                "{{metricName}}"
+              ]
+            },
+            "description": "Por defecto consulta jvm.memory.used. Cambia metricName usando uno de los nombres devueltos por Listar métricas."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Métrica disponible\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Servicio C · Monitoreo",
+      "item": [
+        {
+          "name": "Conteos globales",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{monitorBaseUrl}}/api/monitoreo/resumen"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Respuesta correcta\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tiempos de ejecución de A",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{monitorBaseUrl}}/api/monitoreo/ejecuciones?page={{page}}&size={{size}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Respuesta correcta\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Salud",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{monitorBaseUrl}}/actuator/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Respuesta correcta\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

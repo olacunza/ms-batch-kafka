@@ -1,0 +1,5 @@
+services:
+  consumer:
+    ports: !reset []
+    environment:
+      KAFKA_CONCURRENCY: 1

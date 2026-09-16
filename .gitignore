@@ -1,0 +1,8 @@
+**/target/
+**/.idea/
+**/.env
+**/config/sqlserver-local.properties
+**/data/
+**/__pycache__/
+.DS_Store
+*.log

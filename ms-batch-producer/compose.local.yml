@@ -1,0 +1,47 @@
+name: reto-kafka
+services:
+  kafka:
+    extends:
+      file: compose.kafka.yml
+      service: kafka
+  kafka-init:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [/bin/sh, -c]
+    command: ['/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic record-ready-topic-v2 --partitions 3 --replication-factor 1 --config min.insync.replicas=1']
+  sqlserver:
+    profiles: [database]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "RetoLocal_2026!"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: [CMD-SHELL, '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -b -Q "SELECT 1" -o /dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+  init-db:
+    profiles: [database]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: "RetoLocal_2026!"
+    volumes:
+      - ./infra/create-database.sql:/init.sql:ro
+    entrypoint: [/bin/sh, -c]
+    command: ['/opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -C -b -i /init.sql']
+volumes:
+  kafka_data:
+  sqlserver_data:

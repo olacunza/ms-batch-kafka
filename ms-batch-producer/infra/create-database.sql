@@ -1,0 +1,2 @@
+IF DB_ID(N'reto_db') IS NULL CREATE DATABASE reto_db;
+GO

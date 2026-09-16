@@ -1,0 +1,3 @@
+name: reto-eventos
+include:
+  - ./ms-batch-producer/docker-compose.yml
